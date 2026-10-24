@@ -1,18 +1,17 @@
 """IMDb ratings from IMDb's ratings dataset, in one local store every add-on using it shares."""
 
 import gzip
-import os
 import sqlite3
 import time
 from typing import Callable, Iterable, Iterator, Optional, Tuple
 from urllib.request import Request, urlopen
 
 import xbmc
-import xbmcaddon
 import xbmcvfs
 
 _ADDON_ID = 'script.module.imdbratings'
 _DATASET_URL = 'https://datasets.imdbws.com/title.ratings.tsv.gz'
+_STORE = 'special://temp/imdbratings.db'
 _HEADERS = {'User-Agent': _ADDON_ID, 'Accept-Encoding': 'identity'}
 _CHECK_GAP = 15 * 60
 _RETRY_GAP = 6 * 3600
@@ -72,15 +71,12 @@ def _connect() -> Optional[sqlite3.Connection]:
     global _conn, _next_check
     if _conn is not None:
         return _conn
-    folder = xbmcvfs.translatePath(xbmcaddon.Addon(_ADDON_ID).getAddonInfo('profile'))
     try:
-        os.makedirs(folder, exist_ok=True)
-        conn = sqlite3.connect(os.path.join(folder, 'ratings.db'), timeout=5,
-                               isolation_level=None)
+        conn = sqlite3.connect(xbmcvfs.translatePath(_STORE), timeout=5, isolation_level=None)
         conn.execute('PRAGMA journal_mode = WAL')
         _create(conn)
         _next_check = _due(conn)
-    except (OSError, sqlite3.Error) as exc:
+    except sqlite3.Error as exc:
         _log(f'cannot open the store: {exc}', xbmc.LOGERROR)
         return None
     _conn = conn
