@@ -11,7 +11,8 @@
     <summary lang="en_GB">IMDb ratings for add-ons</summary>
     <description lang="en_GB">IMDb ratings and vote counts from IMDb's ratings dataset, updated when IMDb publishes a new one.</description>
     <disclaimer lang="en_GB">Information courtesy of IMDb (https://www.imdb.com). Used with permission.</disclaimer>
-    <news>1.0.0
+    <news>
+1.0.0
 - Initial release
     </news>
     <platform>all</platform>
