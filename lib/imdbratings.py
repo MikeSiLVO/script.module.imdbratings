@@ -20,6 +20,8 @@ _HEADERS = {'User-Agent': _ADDON_ID, 'Accept-Encoding': 'identity'}
 _CHECK_GAP = 15 * 60
 _RETRY_GAP = 6 * 3600
 _STOP_CHECK_LINES = 10000
+_BUSY_TIMEOUT = 5  # seconds a connection waits for another's write lock
+_WAIT_STEP_MS = 1000
 _SCHEMA = 1
 
 _local = threading.local()
@@ -49,16 +51,24 @@ class _Holder:
         self.conn.close()
 
 
-def get_rating(imdb_id: Optional[str]) -> Optional[Tuple[float, int]]:
-    """Get the rating and vote count of an IMDb title, updating the store first when it is due."""
+def get_rating(imdb_id: Optional[str],
+               abort: Optional[Callable[[], bool]] = None) -> Optional[Tuple[float, int]]:
+    """Get the rating and vote count of an IMDb title, updating the store first when it is due.
+
+    Until a first dataset is loaded, waits while another add-on loads it, rather than answer None
+    for want of one. Kodi shutting down, or abort() returning True, ends the wait and a download.
+    """
     title = _title_number(imdb_id)
     if title is None:
         return None
+    stopped = _stopper(abort)
     conn = _connect()
     if conn is not None and time.time() >= _next_check:
-        _update(conn)
+        _update(conn, abort)
         # an update that repaired a damaged store dropped the connection
         conn = _connect()
+    if conn is not None:
+        _await_first_load(conn, stopped)
     if conn is None:
         return None
     try:
@@ -147,7 +157,7 @@ def _open(retry: bool = True) -> sqlite3.Connection:
     inode = _inode(path)
     conn = None
     try:
-        conn = sqlite3.connect(path, timeout=5, isolation_level=None)
+        conn = sqlite3.connect(path, timeout=_BUSY_TIMEOUT, isolation_level=None)
         conn.execute('PRAGMA journal_mode = WAL')
         _create(conn)
         if not _next_check:
@@ -333,19 +343,7 @@ def _reload(conn: sqlite3.Connection, abort: Optional[Callable[[], bool]],
     if not modified or not _newer(modified, _meta(conn, 'modified')):
         return False
 
-    callback = abort
-
-    def stopped() -> bool:
-        nonlocal callback
-        if _monitor.abortRequested():
-            return True
-        try:
-            return callback is not None and bool(callback())
-        except Exception as exc:
-            _log(f'abort callback failed, ignoring it: {exc}', xbmc.LOGERROR)
-            callback = None
-            return False
-
+    stopped = _stopper(abort)
     if stopped():
         raise _Stopped()
     _log('downloading the ratings dataset', xbmc.LOGINFO)
@@ -423,6 +421,59 @@ def _newer(remote: str, stored: Optional[str]) -> bool:
         return parsedate_to_datetime(remote) > parsedate_to_datetime(stored)
     except (TypeError, ValueError):
         return remote != stored
+
+
+def _await_first_load(conn: sqlite3.Connection, stopped: Callable[[], bool]) -> None:
+    """Wait while another add-on holds the store to make the first load of the dataset.
+
+    Returns at once when a dataset is loaded, when nothing holds the store, so no load is being
+    made, when the store fails, or when a stop is asked for.
+    """
+    waiting = False
+    try:
+        # a second at a time, so that a stop is seen within one
+        conn.execute(f'PRAGMA busy_timeout = {_WAIT_STEP_MS}')
+        while not stopped():
+            try:
+                if _meta(conn, 'modified') is not None:
+                    return
+                # a load holds the write lock: this waits out the busy timeout
+                conn.execute('BEGIN IMMEDIATE')
+            except sqlite3.OperationalError as exc:
+                if 'locked' in str(exc) or 'busy' in str(exc):
+                    if not waiting:
+                        _log('waiting for the first load of the dataset', xbmc.LOGINFO)
+                        waiting = True
+                    continue
+                _log_error(f'waiting for the first load failed: {exc}')
+                return
+            except sqlite3.Error as exc:
+                _log_error(f'waiting for the first load failed: {exc}')
+                _mend(exc)
+                return
+            conn.execute('ROLLBACK')
+            return
+    finally:
+        conn.execute(f'PRAGMA busy_timeout = {_BUSY_TIMEOUT * 1000}')
+
+
+def _stopper(abort: Optional[Callable[[], bool]]) -> Callable[[], bool]:
+    """A check for a stop: Kodi shutting down, or abort() returning True. An abort that raises is
+    logged and ignored from then on."""
+    callback = abort
+
+    def stopped() -> bool:
+        nonlocal callback
+        if _monitor.abortRequested():
+            return True
+        try:
+            return callback is not None and bool(callback())
+        except Exception as exc:
+            _log(f'abort callback failed, ignoring it: {exc}', xbmc.LOGERROR)
+            callback = None
+            return False
+
+    return stopped
 
 
 def _meta(conn: sqlite3.Connection, key: str) -> Optional[str]:

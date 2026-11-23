@@ -20,6 +20,8 @@ get_rating('tt0111161')  # (9.3, 3256723)
 
 Returns the rating and vote count, or `None` for an id the dataset doesn't have. The first lookup on an install downloads the dataset and waits for it. After that, lookups pick up newer datasets on their own.
 
+Until a first dataset is loaded, a lookup waits while another add-on loads it, so a caller doesn't get `None` for want of a dataset. The optional `abort` argument, as for `refresh()`, is checked during that wait and during a download; return `True` from it to stop waiting. A wait also ends when Kodi shuts down.
+
 ## Update on a schedule
 
 For an add-on that updates the library when IMDb publishes new data:
