@@ -10,5 +10,5 @@ jobs:
     if: github.repository == 'MikeSiLVO/script.module.imdbratings'
     permissions:
       issues: write
-    uses: MikeSiLVO/workflows/.github/workflows/stale-issues.yml@v2.4.1
+    uses: MikeSiLVO/workflows/.github/workflows/stale-issues.yml@v2.5.0
     secrets: inherit
